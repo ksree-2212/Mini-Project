@@ -6,16 +6,16 @@ BASE_DIR = Path(__file__).resolve().parent.parent.parent
 WORKSPACE_DIR = BASE_DIR / "workspace"
 
 def load_dotenv():
-    env_file = BASE_DIR / ".env"
-    if env_file.exists():
-        with open(env_file, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if line and not line.startswith("#") and "=" in line:
-                    k, v = line.split("=", 1)
-                    k, v = k.strip(), v.strip()
-                    if k not in os.environ:
-                        os.environ[k] = v
+    for fpath in (BASE_DIR / ".env", BASE_DIR / "ai_studio_code.env"):
+        if fpath.exists():
+            with open(fpath, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if line and not line.startswith("#") and "=" in line:
+                        k, v = line.split("=", 1)
+                        k, v = k.strip(), v.strip().strip('"').strip("'")
+                        if k not in os.environ or not os.environ[k]:
+                            os.environ[k] = v
 
 load_dotenv()
 
@@ -26,6 +26,7 @@ class Settings(BaseModel):
     # LLM Settings
     llm_provider: str = Field(default_factory=lambda: os.getenv("LLM_PROVIDER", "local"))
     llm_api_key: str = Field(default_factory=lambda: os.getenv("LLM_API_KEY", ""))
+    gemini_api_key: str = Field(default_factory=lambda: os.getenv("GEMINI_API_KEY", ""))
     llm_model: str = Field(default_factory=lambda: os.getenv("LLM_MODEL", "gpt-4o"))
     llm_base_url: str = Field(default_factory=lambda: os.getenv("LLM_BASE_URL", "https://api.openai.com/v1"))
     
@@ -49,7 +50,7 @@ class Settings(BaseModel):
     numeric_tolerance: float = Field(default_factory=lambda: float(os.getenv("NUMERIC_TOLERANCE", "0.001")))
     
     # Compilers / Runtimes
-    java_home: str = Field(default_factory=lambda: os.getenv("JAVA_HOME", "/usr/lib/jvm/java-17-openjdk-amd64"))
+    java_home: str = Field(default_factory=lambda: os.getenv("JAVA_HOME", ""))
     cobol_compiler: str = Field(default_factory=lambda: os.getenv("COBOL_COMPILER", "builtin"))
     
     # Server

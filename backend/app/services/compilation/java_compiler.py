@@ -21,7 +21,16 @@ class JavaCompiler:
     """
     def __init__(self, java_home: Optional[str] = None):
         self.java_home = java_home or settings.java_home
-        self.java_bin = f"{self.java_home}/bin/java" if os.path.exists(f"{self.java_home}/bin/java") else "java"
+        if self.java_home:
+            j_bin = Path(self.java_home) / "bin" / ("javac.exe" if os.name == "nt" else "javac")
+            if j_bin.exists():
+                self.javac_bin = str(j_bin)
+            elif os.path.exists(f"{self.java_home}/bin/javac"):
+                self.javac_bin = f"{self.java_home}/bin/javac"
+            else:
+                self.javac_bin = "javac"
+        else:
+            self.javac_bin = "javac"
 
     def compile(self, project_dir: Path, entry_file: Path) -> CompileResult:
         if not entry_file.exists():
@@ -33,7 +42,11 @@ class JavaCompiler:
                 error_type="MISSING_FILE"
             )
 
-        cmd = [self.java_bin, str(entry_file)]
+        source_dir = project_dir / "src" / "main" / "java"
+        if source_dir.exists():
+            cmd = [self.javac_bin, "-sourcepath", str(source_dir), str(entry_file)]
+        else:
+            cmd = [self.javac_bin, str(entry_file)]
         try:
             res = subprocess.run(
                 cmd,
@@ -45,9 +58,7 @@ class JavaCompiler:
 
             combined_output = (res.stderr + "\n" + res.stdout).strip()
 
-            # Note: Java 17 single-file source runner prints "error: can't find main(String[]) method"
-            # ONLY AFTER compilation successfully passes!
-            if "can't find main(String[]) method" in combined_output and "error: compilation failed" not in combined_output:
+            if res.returncode == 0:
                 return CompileResult(
                     success=True,
                     errors="",
@@ -57,7 +68,7 @@ class JavaCompiler:
                 )
 
             # Check if compilation failed
-            if "error: compilation failed" in combined_output or (": error:" in combined_output):
+            if "error:" in combined_output:
                 error_lines = []
                 for match in re.finditer(r':(\d+):\s*error:', combined_output):
                     error_lines.append(int(match.group(1)))

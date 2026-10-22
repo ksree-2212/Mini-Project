@@ -200,7 +200,10 @@ class WorkspaceManager:
 
         # Save graph to disk
         with open(pdir / "graph" / "dependency_graph.json", "w", encoding="utf-8") as gf:
-            gf.write(combined_graph.json(indent=2))
+            if hasattr(combined_graph, "model_dump_json"):
+                gf.write(combined_graph.model_dump_json(indent=2))
+            else:
+                gf.write(combined_graph.json(indent=2))
 
         # Update Project Status
         cursor.execute("UPDATE projects SET status = 'INDEXED' WHERE project_id = ?", (project_id,))

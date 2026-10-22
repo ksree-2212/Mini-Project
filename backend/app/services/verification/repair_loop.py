@@ -194,11 +194,15 @@ class RepairLoopOrchestrator:
     def _persist_attempt(self, attempt: RepairAttemptSchema):
         conn = get_connection()
         cursor = conn.cursor()
+        test_results_json = json.dumps([
+            tr.model_dump() if hasattr(tr, "model_dump") else tr.dict()
+            for tr in attempt.test_results
+        ])
         cursor.execute(
             """
             INSERT OR REPLACE INTO attempts
-            (attempt_id, migration_id, attempt_number, generated_code, compile_status, compile_errors, tests_passed, tests_total, status, failure_category, diagnosis)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (attempt_id, migration_id, attempt_number, generated_code, compile_status, compile_errors, tests_passed, tests_total, status, failure_category, diagnosis, test_results)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 attempt.attempt_id,
@@ -211,7 +215,8 @@ class RepairLoopOrchestrator:
                 attempt.tests_total,
                 attempt.status,
                 attempt.failure_category,
-                attempt.diagnosis
+                attempt.diagnosis,
+                test_results_json
             )
         )
         conn.commit()

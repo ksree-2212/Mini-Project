@@ -214,6 +214,23 @@ async def migrate_code(project_id: str, req: MigrationRequest):
     migration_id = f"mig_{uuid.uuid4().hex[:10]}"
     pdir = workspace_mgr.get_project_dir(project_id)
 
+    # Pre-insert migration record so foreign key constraint in 'attempts' table is satisfied
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO migrations
+        (migration_id, project_id, target_mode, target_name, query, status, retrieval_context, generated_code, final_status, total_attempts, metrics)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            migration_id, project_id, req.target_mode, req.target_name, req.query,
+            "RUNNING", "{}", "", "RUNNING", 1, "{}"
+        )
+    )
+    conn.commit()
+    conn.close()
+
     # 1. Retrieval
     await emit_pipeline_event(project_id, 5, "Retrieval", "RUNNING", f"Retrieving context for {req.target_name}...")
     cb_resolver = CopybookResolver([pdir / "copybooks", pdir / "source"])
@@ -251,6 +268,7 @@ async def migrate_code(project_id: str, req: MigrationRequest):
     cursor = conn.cursor()
     cursor.execute("SELECT content FROM files WHERE project_id = ? AND file_type = 'SOURCE' LIMIT 1", (project_id,))
     row = cursor.fetchone()
+    conn.close()
     cobol_source = row["content"] if row else ""
 
     repair_orchestrator = RepairLoopOrchestrator(
@@ -276,20 +294,22 @@ async def migrate_code(project_id: str, req: MigrationRequest):
     final_msg = "Functional verification PASS (100% equivalence)." if verif_report.final_status == "VERIFIED" else "Verification FAILED."
     await emit_pipeline_event(project_id, 11, "Final Verification", "SUCCESS" if verif_report.final_status == "VERIFIED" else "FAILED", final_msg)
 
-    # Persist Migration
+    # Update Persisted Migration
     total_time = (time.time() - t_start) * 1000.0
+    conn = get_connection()
+    cursor = conn.cursor()
     cursor.execute(
         """
-        INSERT INTO migrations
-        (migration_id, project_id, target_mode, target_name, query, status, retrieval_context, generated_code, final_status, total_attempts, metrics)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        UPDATE migrations
+        SET status = ?, retrieval_context = ?, generated_code = ?, final_status = ?, total_attempts = ?, metrics = ?, updated_at = CURRENT_TIMESTAMP
+        WHERE migration_id = ?
         """,
         (
-            migration_id, project_id, req.target_mode, req.target_name, req.query,
-            verif_report.final_status, json.dumps(bundle.inspection.dict()),
+            verif_report.final_status, json.dumps(bundle.inspection.model_dump() if hasattr(bundle.inspection, "model_dump") else bundle.inspection.dict()),
             trans_res["files"][0].content if trans_res["files"] else "",
             verif_report.final_status, verif_report.total_repair_attempts,
-            json.dumps({"total_time_ms": total_time, "equivalence_rate": verif_report.equivalence_rate})
+            json.dumps({"total_time_ms": total_time, "equivalence_rate": verif_report.equivalence_rate}),
+            migration_id
         )
     )
     conn.commit()
@@ -326,7 +346,16 @@ def get_migration_verification(migration_id: str):
     if not mig_row:
         raise HTTPException(status_code=404, detail="Migration not found")
 
-    attempts = [dict(a) for a in att_rows]
+    attempts = []
+    for a in att_rows:
+        ad = dict(a)
+        if "test_results" in ad and isinstance(ad["test_results"], str):
+            try:
+                ad["test_results"] = json.loads(ad["test_results"])
+            except:
+                ad["test_results"] = []
+        attempts.append(ad)
+
     return {
         "migration_id": migration_id,
         "final_status": mig_row["final_status"],

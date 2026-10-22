@@ -108,10 +108,17 @@ def init_db():
         status TEXT,
         failure_category TEXT,
         diagnosis TEXT,
+        test_results TEXT DEFAULT '[]',
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY (migration_id) REFERENCES migrations(migration_id) ON DELETE CASCADE
     );
     """)
+
+    # Ensure existing database has test_results column
+    try:
+        cursor.execute("ALTER TABLE attempts ADD COLUMN test_results TEXT DEFAULT '[]';")
+    except Exception:
+        pass
     
     # Test cases table
     cursor.execute("""

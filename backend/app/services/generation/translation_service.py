@@ -6,6 +6,7 @@ from backend.app.config import settings
 from backend.app.providers.base import LLMProvider, LLMResponse
 from backend.app.providers.openai_provider import OpenAICompatibleProvider
 from backend.app.providers.anthropic_provider import AnthropicProvider
+from backend.app.providers.gemini_provider import GeminiProvider
 from backend.app.providers.local_provider import LocalModelProvider
 from backend.app.schemas.migration import GeneratedFile
 
@@ -21,10 +22,21 @@ class TranslationService:
             self.provider = provider
         else:
             p_name = settings.llm_provider.lower()
+            gemini_key = settings.gemini_api_key or settings.llm_api_key
+            if (p_name in ('gemini', 'google') or gemini_key) and gemini_key != "YOUR_COPIED_API_KEY_HERE" and p_name != "local":
+                try:
+                    self.provider = GeminiProvider(api_key=gemini_key)
+                    logger.info("TranslationService initialized with GeminiProvider")
+                    return
+                except Exception as e:
+                    logger.warning(f"Could not initialize GeminiProvider: {e}, falling back...")
+            
             if p_name in ('openai', 'azure', 'vllm') and settings.llm_api_key:
                 self.provider = OpenAICompatibleProvider()
             elif p_name in ('anthropic', 'claude') and settings.llm_api_key:
                 self.provider = AnthropicProvider()
+            elif p_name in ('gemini', 'google') and gemini_key and gemini_key != "YOUR_COPIED_API_KEY_HERE":
+                self.provider = GeminiProvider(api_key=gemini_key)
             else:
                 self.provider = LocalModelProvider()
 

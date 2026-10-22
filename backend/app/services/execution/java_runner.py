@@ -13,20 +13,52 @@ class JavaRunner:
     """
     def __init__(self, java_home: Optional[str] = None):
         self.java_home = java_home or settings.java_home
-        self.java_bin = f"{self.java_home}/bin/java" if os.path.exists(f"{self.java_home}/bin/java") else "java"
+        if self.java_home:
+            j_bin = Path(self.java_home) / "bin" / ("java.exe" if os.name == "nt" else "java")
+            if j_bin.exists():
+                self.java_bin = str(j_bin)
+            elif os.path.exists(f"{self.java_home}/bin/java"):
+                self.java_bin = f"{self.java_home}/bin/java"
+            else:
+                self.java_bin = "java"
+        else:
+            self.java_bin = "java"
 
     def execute(self, project_dir: Path, class_name: str, input_data: Dict[str, Any]) -> Dict[str, Any]:
         target_source = project_dir / "src" / "main" / "java" / "com" / "migration" / f"{class_name}.java"
         if not target_source.exists():
-            return {
-                "status": "ERROR",
-                "error_type": "MISSING_SOURCE_FILE",
-                "message": f"Source file not found: {target_source}"
-            }
+            # Fallback to direct project directory
+            target_source = project_dir / f"{class_name}.java"
+            if not target_source.exists():
+                return {
+                    "status": "ERROR",
+                    "error_type": "MISSING_SOURCE_FILE",
+                    "message": f"Source file not found: {target_source}"
+                }
+
+        # Ensure class is compiled
+        class_file = target_source.with_suffix(".class")
+        if not class_file.exists():
+            if self.java_home:
+                jc_bin = Path(self.java_home) / "bin" / ("javac.exe" if os.name == "nt" else "javac")
+                javac_bin = str(jc_bin) if jc_bin.exists() else "javac"
+            else:
+                javac_bin = "javac"
+            subprocess.run([javac_bin, str(target_source)], capture_output=True, timeout=15)
 
         # Build execution arguments
         args = [f"{k}={v}" for k, v in input_data.items()]
-        cmd = [self.java_bin, str(target_source)] + args
+        
+        # Check package
+        content = target_source.read_text(encoding="utf-8", errors="ignore")
+        if "package com.migration;" in content:
+            cp_dir = project_dir / "src" / "main" / "java"
+            full_class = f"com.migration.{class_name}"
+        else:
+            cp_dir = target_source.parent
+            full_class = class_name
+
+        cmd = [self.java_bin, "-cp", str(cp_dir), full_class] + args
 
         start_time = time.time()
         try:
