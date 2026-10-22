@@ -44,13 +44,37 @@ class BenchmarkRunner:
         pdir = self.wm.get_project_dir(project_id)
         cb_resolver = CopybookResolver([pdir / "copybooks", pdir / "source"])
 
-        # Fetch COBOL source
+        # Fetch COBOL source and project status
         conn = get_connection()
         cursor = conn.cursor()
-        cursor.execute("SELECT content FROM files WHERE project_id = ? AND file_type = 'SOURCE' LIMIT 1", (project_id,))
+        cursor.execute("SELECT status FROM projects WHERE project_id = ?", (project_id,))
+        p_row = cursor.fetchone()
+        cursor.execute("SELECT COUNT(*) as count FROM chunks WHERE project_id = ?", (project_id,))
+        c_count = cursor.fetchone()["count"]
+        cursor.execute("SELECT file_name, content FROM files WHERE project_id = ? AND file_type = 'SOURCE' LIMIT 1", (project_id,))
         row = cursor.fetchone()
         conn.close()
+
         cobol_source = row["content"] if row else ""
+
+        # Auto-index if not already indexed
+        if (not p_row or p_row["status"] != "INDEXED" or c_count == 0) and cobol_source:
+            try:
+                self.wm.analyze_project(project_id)
+            except Exception:
+                pass
+
+        # Auto-detect real target name if defaulting to BILLING-MODULE on non-billing program
+        if cobol_source:
+            src_upper = cobol_source.upper()
+            is_billing = "WS-GROSS-AMOUNT" in src_upper or "GROSS-AMOUNT" in src_upper
+            if not is_billing and (not target_name or target_name == "BILLING-MODULE"):
+                import re
+                m_pid = re.search(r'PROGRAM-ID\.\s*([A-Za-z0-9_-]+)', cobol_source, re.IGNORECASE)
+                if m_pid:
+                    target_name = m_pid.group(1).strip()
+                elif row and row["file_name"]:
+                    target_name = Path(row["file_name"]).stem
 
         # ------------------ RUN BASELINE ------------------
         t_b_start = time.time()
@@ -68,7 +92,8 @@ class BenchmarkRunner:
             project_name=project_id,
             target_name=target_name,
             context=b_context,
-            baseline=True
+            baseline=True,
+            cobol_source=cobol_source
         )
         b_trans = self.translator.translate(b_prompt)
         t_b_generation = (time.time() - t_b_gen_start) * 1000.0
@@ -111,7 +136,8 @@ class BenchmarkRunner:
             project_name=project_id,
             target_name=target_name,
             context=p_context,
-            baseline=False
+            baseline=False,
+            cobol_source=cobol_source
         )
         p_trans = self.translator.translate(p_prompt)
         t_p_generation = (time.time() - t_p_gen_start) * 1000.0
@@ -220,5 +246,38 @@ th {{ background: #f1f5f9; font-weight: 600; }}
 """
         with open(rep_dir / "report.html", "w", encoding="utf-8") as hf:
             hf.write(html_content)
+
+        # Persist benchmark execution to database
+        try:
+            b_id = f"bm_{uuid.uuid4().hex[:10]}"
+            conn = get_connection()
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                INSERT INTO benchmarks
+                (benchmark_id, project_id, system_type, compile_success_rate, test_pass_rate,
+                 functional_equivalence_rate, dependency_failures, copybook_failures,
+                 avg_retrieval_latency, avg_generation_latency, avg_verification_latency,
+                 repair_attempts, details)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    b_id, project_id, "EMPIRICAL_EVALUATION",
+                    1.0 if results["proposed"]["compile_success"] else 0.0,
+                    results["proposed"]["test_pass_rate"],
+                    results["proposed"]["test_pass_rate"],
+                    results["proposed"]["dependency_failures"],
+                    results["proposed"]["copybook_failures"],
+                    results["proposed"]["retrieval_latency_ms"],
+                    results["proposed"]["generation_latency_ms"],
+                    results["proposed"]["verification_latency_ms"],
+                    results["proposed"]["repair_attempts"],
+                    json.dumps(results)
+                )
+            )
+            conn.commit()
+            conn.close()
+        except Exception:
+            pass
 
         return results

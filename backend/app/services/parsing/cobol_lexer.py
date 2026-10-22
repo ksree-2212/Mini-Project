@@ -29,10 +29,12 @@ class CobolLexer:
                 line = line.split('*>', 1)[0]
                 
             # If fixed format line with sequence numbers in col 1-6
-            # Standard COBOL has code in cols 8 to 72
-            if len(line) >= 7 and (line[:6].isdigit() or line[:6].isspace()) and line[6] in (' ', '-'):
-                # Extract columns 8-72 if available
+            # Standard COBOL has code in cols 8 to 72 with sequence numbers in 1-6
+            if len(line) >= 7 and line[:6].isdigit() and line[6] in (' ', '-'):
                 content = line[7:72] if len(line) >= 72 else line[7:]
+            elif len(line) >= 7 and line[:6].isspace() and line[6] in (' ', '-'):
+                # Indented line without sequence numbers: strip indicator column but do not truncate valid code
+                content = line[7:]
             else:
                 content = line
 

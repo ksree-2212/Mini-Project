@@ -20,10 +20,90 @@ class DifferentialTester:
         self.normalizer = OutputNormalizer()
 
     @staticmethod
-    def generate_test_suite(module_name: str = "BILLING-MODULE") -> List[TestCaseSchema]:
+    def _generate_dynamic_test_suite(
+        module_name: str,
+        numeric_vars: List[Any],
+        alpha_vars: List[Any]
+    ) -> List[TestCaseSchema]:
+        cases: List[TestCaseSchema] = []
+        random.seed(42)
+
+        def make_input(scale: float = 1.0, zero: bool = False, fuzz_idx: Optional[int] = None) -> Dict[str, Any]:
+            inp: Dict[str, Any] = {}
+            for item in numeric_vars:
+                base_val = 100.0
+                if item.value is not None:
+                    try:
+                        base_val = float(item.value)
+                        if base_val == 0.0:
+                            base_val = 50.0
+                    except (ValueError, TypeError):
+                        base_val = 50.0
+                if zero:
+                    val = 0.0
+                elif fuzz_idx is not None:
+                    rnd_factor = random.uniform(0.1, 5.0)
+                    val = round(base_val * rnd_factor, 2)
+                else:
+                    val = round(base_val * scale, 2)
+                inp[item.name] = val
+                clean = item.name[3:] if item.name.startswith("WS-") else item.name
+                inp[clean] = val
+
+            for item in alpha_vars:
+                inp[item.name] = str(item.value or "STANDARD")
+                clean = item.name[3:] if item.name.startswith("WS-") else item.name
+                inp[clean] = str(item.value or "STANDARD")
+
+            return inp
+
+        cases.append(TestCaseSchema(test_id="TC_01_NOMINAL_BASE", module_name=module_name, source_type="existing", input_data=make_input(scale=1.0)))
+        cases.append(TestCaseSchema(test_id="TC_02_MEDIAN_SCALE", module_name=module_name, source_type="existing", input_data=make_input(scale=2.5)))
+        cases.append(TestCaseSchema(test_id="TC_03_ZERO_BOUNDARY", module_name=module_name, source_type="boundary", input_data=make_input(zero=True)))
+        cases.append(TestCaseSchema(test_id="TC_04_MIN_VALUE", module_name=module_name, source_type="boundary", input_data=make_input(scale=0.01)))
+        cases.append(TestCaseSchema(test_id="TC_05_THRESHOLD_VALUE", module_name=module_name, source_type="boundary", input_data=make_input(scale=0.99)))
+        cases.append(TestCaseSchema(test_id="TC_06_HIGH_BOUNDARY", module_name=module_name, source_type="boundary", input_data=make_input(scale=10.0)))
+        cases.append(TestCaseSchema(test_id="TC_07_FRACTIONAL", module_name=module_name, source_type="boundary", input_data=make_input(scale=1.37)))
+        cases.append(TestCaseSchema(test_id="TC_08_LARGE_SCALE", module_name=module_name, source_type="boundary", input_data=make_input(scale=50.0)))
+
+        for i in range(1, 11):
+            cases.append(TestCaseSchema(test_id=f"TC_FUZZ_{i:02d}", module_name=module_name, source_type="fuzz", input_data=make_input(fuzz_idx=i)))
+
+        cases.append(TestCaseSchema(test_id="TC_SYM_01_EDGE", module_name=module_name, source_type="symbolic_planned", input_data=make_input(scale=0.5)))
+        cases.append(TestCaseSchema(test_id="TC_SYM_02_BOUNDARY", module_name=module_name, source_type="symbolic_planned", input_data=make_input(scale=5.5)))
+
+        return cases
+
+    @staticmethod
+    def generate_test_suite(module_name: str = "BILLING-MODULE", cobol_source: Optional[str] = None) -> List[TestCaseSchema]:
         """
         Generates boundary and fuzz test cases according to Section 30.
+        Dynamically derives inputs from the parsed COBOL source when available.
         """
+        if cobol_source:
+            src_upper = cobol_source.upper()
+            has_billing = "WS-GROSS-AMOUNT" in src_upper or "GROSS-AMOUNT" in src_upper or "BILLING" in module_name.upper()
+            has_payroll = ("HOURLY-RATE" in src_upper and "HOURS-WORKED" in src_upper) or "PAYROLL" in module_name.upper()
+            if not has_billing and not has_payroll:
+                try:
+                    from backend.app.services.parsing.cobol_parser import CobolParser
+                    from backend.app.services.parsing.cobol_ast import DataItemNode
+                    prog = CobolParser(cobol_source).parse()
+                    items = []
+                    data_div = prog.divisions.get("DATA")
+                    if data_div:
+                        items.extend(data_div.data_items)
+                        for sec in data_div.sections:
+                            for c in sec.children:
+                                if isinstance(c, DataItemNode) and c not in items:
+                                    items.append(c)
+                    num_vars = [it for it in items if it.data_type in ("NUMERIC", "DECIMAL") and it.name]
+                    alpha_vars = [it for it in items if it.data_type == "ALPHANUMERIC" and it.name]
+                    if num_vars or alpha_vars:
+                        return DifferentialTester._generate_dynamic_test_suite(module_name, num_vars, alpha_vars)
+                except Exception:
+                    pass
+
         cases: List[TestCaseSchema] = []
         is_payroll = "payroll" in module_name.lower() or "salary" in module_name.lower() or "employee" in module_name.lower()
 

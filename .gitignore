@@ -40,7 +40,7 @@ ENV/
 !.env.example
 
 # Runtime workspace database & generated artifacts
-workspace/*.db
+workspace/*.db*
 workspace/*.json
 workspace/projects/
 !workspace/.gitkeep

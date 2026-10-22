@@ -1088,20 +1088,20 @@
           <tbody id="benchmark-tbody">
             <tr>
               <td><strong>Compilation Success Rate</strong></td>
-              <td id="bm-base-compile">100%</td>
-              <td id="bm-prop-compile">100%</td>
+              <td id="bm-base-compile">—</td>
+              <td id="bm-prop-compile">—</td>
               <td><span class="tag tag-pass">Syntactically Valid Java</span></td>
             </tr>
             <tr>
               <td><strong>Functional Test Pass Rate</strong></td>
-              <td id="bm-base-pass" style="color: #fb7185; font-weight: 700;">65%</td>
-              <td id="bm-prop-pass" style="color: #34d399; font-weight: 700;">100%</td>
-              <td><span class="tag tag-pass">+35% (All Routines Preserved)</span></td>
+              <td id="bm-base-pass" style="color: #fb7185; font-weight: 700;">—</td>
+              <td id="bm-prop-pass" style="color: #34d399; font-weight: 700;">—</td>
+              <td id="bm-delta-pass"><span class="tag tag-pass">Empirical Parity</span></td>
             </tr>
             <tr>
               <td><strong>Semantic Functional Equivalence</strong></td>
-              <td id="bm-base-eq"><span class="tag tag-fail">FAILED</span></td>
-              <td id="bm-prop-eq"><span class="tag tag-pass">VERIFIED</span></td>
+              <td id="bm-base-eq"><span class="tag tag-fail">—</span></td>
+              <td id="bm-prop-eq"><span class="tag tag-pass">—</span></td>
               <td><span class="tag tag-pass">Bitwise & Decimal Parity</span></td>
             </tr>
             <tr>
@@ -1212,6 +1212,7 @@
     await loadProjectFiles();
     await loadAST();
     await renderGraph();
+    await loadProjectBenchmark();
     initSSE();
   }
 
@@ -1475,7 +1476,7 @@
       treeDiv.appendChild(rootDiv);
     });
 
-    // Populate COBOL source view
+    // Populate COBOL source view and detect target name
     if (fileList.length > 0) {
       const mainCob = fileList.find(f => f.file_name.endsWith(".cob") || f.file_type === "SOURCE");
       if (mainCob) {
@@ -1483,6 +1484,17 @@
         const fdata = await fres.json();
         document.getElementById("ast-source-filename").textContent = fdata.file_name;
         document.getElementById("mig-cobol-code").textContent = fdata.content;
+
+        // Auto-detect program target name from COBOL content or file name
+        let detectedTarget = mainCob.file_name.replace(/\.[^/.]+$/, "");
+        const progMatch = fdata.content.match(/PROGRAM-ID\.\s*([A-Za-z0-9_-]+)/i);
+        if (progMatch) {
+          detectedTarget = progMatch[1].trim();
+        }
+        const targetInput = document.getElementById("mig-target-name");
+        if (targetInput) {
+          targetInput.value = detectedTarget;
+        }
       }
     }
   }
@@ -2260,17 +2272,20 @@
     });
   }
 
-  // Benchmark Run
-  async function runBenchmark() {
-    if (!currentProjectId) return;
-    const res = await fetch(`/api/benchmark/run?project_id=${currentProjectId}`, { method: "POST" });
-    const bdata = await res.json();
-    
+  function updateBenchmarkUI(bdata) {
+    if (!bdata || !bdata.baseline || !bdata.proposed) return;
     document.getElementById("bm-base-compile").textContent = bdata.baseline.compile_success ? "100%" : "FAIL";
     document.getElementById("bm-prop-compile").textContent = bdata.proposed.compile_success ? "100%" : "FAIL";
 
     document.getElementById("bm-base-pass").textContent = `${bdata.baseline.test_pass_rate}%`;
     document.getElementById("bm-prop-pass").textContent = `${bdata.proposed.test_pass_rate}%`;
+
+    const delta = (bdata.proposed.test_pass_rate - bdata.baseline.test_pass_rate).toFixed(1);
+    const deltaSign = delta >= 0 ? `+${delta}%` : `${delta}%`;
+    const deltaEl = document.getElementById("bm-delta-pass");
+    if (deltaEl) {
+      deltaEl.innerHTML = `<span class="tag tag-pass">${deltaSign} (${bdata.proposed.test_pass_rate === 100 ? 'All Routines Preserved' : 'Evaluated Parity'})</span>`;
+    }
 
     document.getElementById("bm-base-eq").innerHTML = bdata.baseline.functional_equivalence ? "<span class='tag tag-pass'>VERIFIED</span>" : "<span class='tag tag-fail'>FAILED</span>";
     document.getElementById("bm-prop-eq").innerHTML = bdata.proposed.functional_equivalence ? "<span class='tag tag-pass'>VERIFIED</span>" : "<span class='tag tag-fail'>FAILED</span>";
@@ -2283,6 +2298,30 @@
 
     document.getElementById("bm-base-repair").textContent = `${bdata.baseline.repair_attempts}`;
     document.getElementById("bm-prop-repair").textContent = `${bdata.proposed.repair_attempts}`;
+  }
+
+  async function loadProjectBenchmark() {
+    if (!currentProjectId) return;
+    try {
+      const res = await fetch(`/api/benchmark/results?project_id=${currentProjectId}`);
+      if (res.ok) {
+        const bdata = await res.json();
+        if (bdata) {
+          updateBenchmarkUI(bdata);
+        }
+      }
+    } catch (e) {
+      console.warn("Could not load project benchmark:", e);
+    }
+  }
+
+  // Benchmark Run
+  async function runBenchmark() {
+    if (!currentProjectId) return;
+    const targetName = document.getElementById("mig-target-name") ? document.getElementById("mig-target-name").value : "";
+    const res = await fetch(`/api/benchmark/run?project_id=${currentProjectId}&target_name=${encodeURIComponent(targetName)}`, { method: "POST" });
+    const bdata = await res.json();
+    updateBenchmarkUI(bdata);
   }
 
   function copyJavaCode() {

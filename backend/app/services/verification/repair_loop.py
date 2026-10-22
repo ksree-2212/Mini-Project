@@ -53,7 +53,7 @@ class RepairLoopOrchestrator:
         last_test_results: List[TestResultSchema] = []
 
         # Generate test suite once for consistent evaluation across attempts
-        test_cases = DifferentialTester.generate_test_suite(target_name)
+        test_cases = DifferentialTester.generate_test_suite(target_name, cobol_source=cobol_source)
 
         for attempt_no in range(1, self.max_attempts + 1):
             attempt_id = f"att_{self.migration_id}_{attempt_no}"
@@ -97,7 +97,8 @@ class RepairLoopOrchestrator:
                         target_name=target_name,
                         context=context,
                         repair_context=repair_ctx,
-                        baseline=baseline
+                        baseline=baseline,
+                        cobol_source=cobol_source
                     )
                     trans_res = self.translation_service.translate(repair_prompt)
                     current_files = trans_res["files"]
@@ -166,7 +167,8 @@ class RepairLoopOrchestrator:
                         target_name=target_name,
                         context=context,
                         repair_context=repair_ctx,
-                        baseline=baseline
+                        baseline=baseline,
+                        cobol_source=cobol_source
                     )
                     trans_res = self.translation_service.translate(repair_prompt)
                     current_files = trans_res["files"]

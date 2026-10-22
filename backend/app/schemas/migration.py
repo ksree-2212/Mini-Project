@@ -2,9 +2,15 @@ from typing import Dict, List, Optional, Any
 from pydantic import BaseModel, Field
 from backend.app.schemas.ast_graph import ChunkInfo, GraphEdge
 
+class RetrievalRequest(BaseModel):
+    query: Optional[str] = None
+    target_name: Optional[str] = None
+    top_k: Optional[int] = 5
+    graph_hops: Optional[int] = 2
+
 class MigrationRequest(BaseModel):
-    project_id: str
-    target_mode: str # 'FILE' | 'PARAGRAPH' | 'QUERY'
+    project_id: Optional[str] = None
+    target_mode: str = "FILE" # 'FILE' | 'PARAGRAPH' | 'QUERY'
     target_name: str
     query: Optional[str] = None
     top_k: int = 5

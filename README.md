@@ -38,11 +38,13 @@ cobol_to_java_neuro_symbolic_rag/
 
 ## Setup & Running
 
-1. **Configure Environment**:
+1. **Configure Environment & Dependencies**:
    ```bash
    cp .env.example .env
-   # Edit .env with your LLM provider and API keys if needed
+   # Edit .env or ai_studio_code.env with your LLM provider and API keys if needed
+   pip install -r requirements.txt
    ```
+   *Note: Java (JDK 17+) should be installed and on PATH for compiling and executing generated Java classes.*
 
 2. **Backend**:
    ```bash
@@ -50,4 +52,9 @@ cobol_to_java_neuro_symbolic_rag/
    ```
 
 3. **Frontend**:
-   Open `frontend/static/index.html` in your browser or serve via the FastAPI backend at `http://localhost:8000/`.
+   Open `http://localhost:8000/` in your browser (served automatically by FastAPI from `frontend/static/index.html`).
+
+4. **Run Test Suite**:
+   ```bash
+   python -m unittest discover -s backend/tests
+   ```

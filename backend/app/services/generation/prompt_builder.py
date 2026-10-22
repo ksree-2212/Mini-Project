@@ -12,7 +12,8 @@ class TranslationPromptBuilder:
         target_name: str,
         context: ContextBundle,
         repair_context: Optional[Dict[str, Any]] = None,
-        baseline: bool = False
+        baseline: bool = False,
+        cobol_source: Optional[str] = None
     ) -> str:
         prompt_parts = []
 
@@ -20,8 +21,11 @@ class TranslationPromptBuilder:
             prompt_parts.append("=== BASELINE UNCONSTRAINED MIGRATION ===")
             prompt_parts.append("Translate the following COBOL code to Java. Return a functional Java project.")
             prompt_parts.append("\n### SOURCE CHUNKS:")
-            for chk in context.primary_chunks:
-                prompt_parts.append(f"```cobol\n{chk.source_code}\n```")
+            if context.primary_chunks:
+                for chk in context.primary_chunks:
+                    prompt_parts.append(f"```cobol\n{chk.source_code}\n```")
+            elif cobol_source:
+                prompt_parts.append(f"```cobol\n{cobol_source}\n```")
             return "\n".join(prompt_parts)
 
         # Proposed AST-Guided Neuro-Symbolic Prompt
@@ -33,9 +37,13 @@ class TranslationPromptBuilder:
 
         # 1. Primary Source Chunks
         prompt_parts.append("\n### 1. PRIMARY TARGET CODE CHUNKS (Retrieved via Semantic Vector Memory):")
-        for chk in context.primary_chunks:
-            prompt_parts.append(f"// Symbol: {chk.symbol_name} ({chk.symbol_type}) [Lines {chk.start_line}-{chk.end_line}]")
-            prompt_parts.append(f"```cobol\n{chk.source_code}\n```\n")
+        if context.primary_chunks:
+            for chk in context.primary_chunks:
+                prompt_parts.append(f"// Symbol: {chk.symbol_name} ({chk.symbol_type}) [Lines {chk.start_line}-{chk.end_line}]")
+                prompt_parts.append(f"```cobol\n{chk.source_code}\n```\n")
+        elif cobol_source:
+            prompt_parts.append(f"// Target Symbol: {target_name}")
+            prompt_parts.append(f"```cobol\n{cobol_source}\n```\n")
 
         # 2. Dependency Chunks
         if context.dependency_chunks:

@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from backend.app.config import settings
 from backend.app.db.database import get_connection, init_db
 from backend.app.schemas.project import ProjectCreate, ProjectResponse, AnalysisSummary
-from backend.app.schemas.migration import MigrationRequest, MigrationResponse, RetrievalInspection, GeneratedFile
+from backend.app.schemas.migration import MigrationRequest, MigrationResponse, RetrievalInspection, GeneratedFile, RetrievalRequest
 from backend.app.schemas.ast_graph import GraphData, ASTNode
 from backend.app.schemas.test_result import VerificationReport
 from backend.app.services.ingestion.workspace_manager import WorkspaceManager
@@ -187,14 +187,24 @@ def get_project_graph(project_id: str):
 # ----------------- RETRIEVAL & MIGRATION -----------------
 
 @app.post("/api/projects/{project_id}/retrieve")
-def retrieve_context(project_id: str, query: str = Query(...), top_k: int = 5, graph_hops: int = 2):
+def retrieve_context(
+    project_id: str,
+    query: Optional[str] = Query(None),
+    top_k: Optional[int] = Query(None),
+    graph_hops: Optional[int] = Query(None),
+    body: Optional[RetrievalRequest] = None
+):
+    eff_query = (body.query if body and body.query else query) or ""
+    eff_top_k = (body.top_k if body and body.top_k is not None else top_k) or 5
+    eff_graph_hops = (body.graph_hops if body and body.graph_hops is not None else graph_hops) or 2
+
     pdir = workspace_mgr.get_project_dir(project_id)
     cb_resolver = CopybookResolver([pdir / "copybooks", pdir / "source"])
     bundle = retriever.retrieve(
         project_id=project_id,
-        query=query,
-        top_k=top_k,
-        graph_hops=graph_hops,
+        query=eff_query,
+        top_k=eff_top_k,
+        graph_hops=eff_graph_hops,
         copybook_resolver=cb_resolver,
         baseline=False
     )
@@ -208,6 +218,7 @@ def retrieve_context(project_id: str, query: str = Query(...), top_k: int = 5, g
 
 @app.post("/api/projects/{project_id}/migrate", response_model=MigrationResponse)
 async def migrate_code(project_id: str, req: MigrationRequest):
+    req.project_id = req.project_id or project_id
     import uuid
     import time
     t_start = time.time()
@@ -245,13 +256,22 @@ async def migrate_code(project_id: str, req: MigrationRequest):
     )
     await emit_pipeline_event(project_id, 5, "Retrieval", "SUCCESS", f"Found {len(bundle.primary_chunks)} primary chunks, {len(bundle.dependency_chunks)} graph dependencies.")
 
+    # Fetch original COBOL source
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT content FROM files WHERE project_id = ? AND file_type = 'SOURCE' LIMIT 1", (project_id,))
+    row = cursor.fetchone()
+    conn.close()
+    cobol_source = row["content"] if row else ""
+
     # 2. Context Assembly
     await emit_pipeline_event(project_id, 6, "Context Assembly", "RUNNING", "Assembling prompt and structural constraints...")
     prompt = TranslationPromptBuilder.build_prompt(
         project_name=project_id,
         target_name=req.target_name,
         context=bundle,
-        baseline=req.baseline
+        baseline=req.baseline,
+        cobol_source=cobol_source
     )
     await emit_pipeline_event(project_id, 6, "Context Assembly", "SUCCESS", f"Context assembled with {len(bundle.structural_constraints)} constraints.")
 
@@ -263,13 +283,6 @@ async def migrate_code(project_id: str, req: MigrationRequest):
     # 4. Verification & Repair Loop
     await emit_pipeline_event(project_id, 8, "Compilation", "RUNNING", "Validating Java compilation...")
     await emit_pipeline_event(project_id, 9, "Differential Testing", "RUNNING", "Executing original COBOL vs Java on test suites...")
-
-    conn = get_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT content FROM files WHERE project_id = ? AND file_type = 'SOURCE' LIMIT 1", (project_id,))
-    row = cursor.fetchone()
-    conn.close()
-    cobol_source = row["content"] if row else ""
 
     repair_orchestrator = RepairLoopOrchestrator(
         project_id=project_id,
@@ -366,8 +379,52 @@ def get_migration_verification(migration_id: str):
 # ----------------- BENCHMARK & EVALUATION -----------------
 
 @app.post("/api/benchmark/run")
-def run_benchmark_endpoint(project_id: str, target_name: str = "BILLING-MODULE", query: str = "billing calculation"):
+def run_benchmark_endpoint(project_id: str, target_name: Optional[str] = None, query: Optional[str] = None):
+    # Auto-detect real target name and query if not specified or defaulting to BILLING-MODULE
+    if not target_name or target_name == "BILLING-MODULE":
+        conn = get_connection()
+        cursor = conn.cursor()
+        cursor.execute("SELECT file_name, content FROM files WHERE project_id = ? AND file_type = 'SOURCE' LIMIT 1", (project_id,))
+        row = cursor.fetchone()
+        conn.close()
+        if row and row["content"]:
+            src_upper = row["content"].upper()
+            if "WS-GROSS-AMOUNT" not in src_upper and "GROSS-AMOUNT" not in src_upper:
+                import re
+                m = re.search(r'PROGRAM-ID\.\s*([A-Za-z0-9_-]+)', row["content"], re.IGNORECASE)
+                target_name = m.group(1).strip() if m else Path(row["file_name"]).stem
+            else:
+                target_name = "BILLING-MODULE"
+        else:
+            target_name = "BILLING-MODULE"
+
+    if not query:
+        query = f"Migrate and verify {target_name}"
+
     return benchmark_runner.run_benchmark(project_id, target_name, query)
+
+@app.get("/api/benchmark/results")
+def get_benchmark_results(project_id: str):
+    pdir = workspace_mgr.get_project_dir(project_id)
+    res_json = pdir / "reports" / "results.json"
+    if res_json.exists():
+        try:
+            with open(res_json, "r", encoding="utf-8") as f:
+                return json.load(f)
+        except Exception:
+            pass
+
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT details FROM benchmarks WHERE project_id = ? ORDER BY created_at DESC LIMIT 1", (project_id,))
+    row = cursor.fetchone()
+    conn.close()
+    if row and row["details"]:
+        try:
+            return json.loads(row["details"])
+        except Exception:
+            pass
+    return None
 
 @app.get("/api/capability-matrix")
 def get_capability_matrix():
